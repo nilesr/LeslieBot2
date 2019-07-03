@@ -34,7 +34,10 @@ If you rename the custom emojis it will probably stop working until the user cha
 
 If a user uses a custom emoji in the discord server, like :eevee:, it sends it to groupme as "(eevee emoji)"
 
+#### Macros
+
+You can add a macro by sending a message with "#add\_macro somename" and an attached image. Once added, anyone can use a macro by sending a message with "#m somename" in it. Only attached images are supported right now, not URLs. Macros are also stored in the cache.
+
 ### Known bugs and mitigations
 
 - **Formatting** Discord supports italics, bold, and italics and bold using markdown, so \*italics\* for *italics*, \*\*bold\*\* for **bold**, and \*\*\*all three\*\*\* for ***all three***. GroupMe does not support this, but the bot will attempt to use some more obscure unicode codepoints to force it, like 𝘪𝘵𝘢𝘭𝘪𝘤𝘴, 𝗯𝗼𝗹𝗱, and 𝙗𝙤𝙡𝙙 𝙞𝙩𝙖𝙡𝙞𝙘𝙨. Some people with iPhones cannot see these symbols. If that's a problem, replace the implementation of `format` with just `return text;`. It also supports discord underline (`__`), underlined italics (`___`), and strikethrough (`~~`) by using combining underline and combining strike through characters.
-

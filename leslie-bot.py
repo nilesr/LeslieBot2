@@ -9,6 +9,7 @@ API_BASE = "https://api.groupme.com/v3"
 
 db = BTEdb.Database("leslie-bot-cache.json")
 if not db.TableExists("main"): db.CreateTable("main")
+if not db.TableExists("macros"): db.CreateTable("macros")
 
 groupme_user_id = 99999999
 groupme_group_id = 99999999
@@ -44,6 +45,71 @@ def register_message(discord_id, groupme_id, groupme_source_guid):
     })
   recent_messages = recent_messages[:40]
   log.debug("Registered message with IDs {}, {}, {}".format(discord_id, groupme_id, groupme_source_guid))
+
+async def add_macro(text, url):
+  matchdata = re.search("#add_macro ([^ ]*)", text)
+  if not matchdata:
+    err = "Failed to find new macro name in message '{}'".format(text)
+    log.error(err)
+    await inject_message(err, False)
+    return
+  name = matchdata.group(1)
+  if len(db.Select("macros", name = name)) > 0:
+    err = "Stubbornly refusing to overwrite existing macro {} to new url {}".format(name, url)
+    log.error(err)
+    await inject_message(err, False)
+    return
+  log.info("Added new macro {} url {}".format(name, url))
+  db.Insert("macros", name = name, url = url)
+
+def get_macro_url(text):
+  matchdata = re.search("#m ([^ ]*)", text)
+  if not matchdata:
+    err = "Failed to find macro name in message '{}'".format(text)
+    log.error(err)
+    return False, err
+  name = matchdata.group(1)
+  results = db.Select("macros", name = name)
+  if len(results) == 0:
+    err = "Failed to find macro with name {} in message '{}'".format(name, text)
+    log.error(err)
+    return False, err
+  return True, results[0]["url"]
+
+async def handle_macro(text, attachments):
+  attachments = [a for a in attachments if a["type"] == "image"]
+  url = False
+  if len(attachments) > 0:
+    url = attachments[0]["url"]
+  if "#add_macro" in text:
+    if not url:
+      await inject_message("No attachment?", False)
+      return
+    await add_macro(text, url)
+    return
+  if re.search("#m [^ ]*", text):
+    status, url = get_macro_url(text)
+    if status:
+      await inject_message("", url)
+    else:
+      await inject_message(url, False)
+
+async def inject_message(text, url):
+  channel = client.get_channel(channel_id)
+  e = None
+  if url:
+    e = discord.Embed()
+    e.set_image(url = url)
+  m = await channel.send(text, embed = e);
+  data = {
+      "text": text,
+      "source_guid": guid(),
+  }
+  if url:
+    data["attachments"] = [{"type": "image", "url": url}]
+  groupme_send_buffer.put([m.id, json.dumps({"message": data})])
+  # groupme send thread will call register_message
+
 
 @client.event
 async def on_ready():
@@ -161,8 +227,10 @@ async def on_message(message):
       }
   for em in message.attachments:
     data["attachments"].append({"type": "image", "url": upload(em.url)})
+
   # data["text"] = data["text"].replace("%", chr(0x200b) + "0⁄0" + chr(0x200b));
   groupme_send_buffer.put([message.id, json.dumps({"message": data})])
+  await handle_macro(message.content, data["attachments"])
 
 
 def favorite_message(id):
@@ -231,8 +299,10 @@ async def RecvMessage(s):
       e = discord.Embed()
       e.set_image(url = attachment["url"])
   emoji = await get_emoji(s["avatar_url"], s["sender_id"], s["name"]) if s["sender_id"] != "system" else ""
+
   m = await channel.send(emoji + "**" + nickname + "**: " + s["text"], embed = e);
   register_message(m.id, int(s["id"]), s["source_guid"])
+  await handle_macro(s["text"], s["attachments"])
 
 client_loop = asyncio.get_event_loop()
 
