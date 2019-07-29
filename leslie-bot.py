@@ -299,7 +299,8 @@ async def RecvMessage(s):
       e = discord.Embed()
       e.set_image(url = attachment["url"])
   emoji = await get_emoji(s["avatar_url"], s["sender_id"], s["name"]) if s["sender_id"] != "system" else ""
-
+  if not s["text"]:
+    s["text"] = ""
   m = await channel.send(emoji + "**" + nickname + "**: " + s["text"], embed = e);
   register_message(m.id, int(s["id"]), s["source_guid"])
   await handle_macro(s["text"], s["attachments"])
