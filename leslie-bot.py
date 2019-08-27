@@ -12,19 +12,28 @@ if not db.TableExists("main"): db.CreateTable("main")
 if not db.TableExists("macros"): db.CreateTable("macros")
 
 groupme_user_id = 99999999
-groupme_group_id = 99999999
 groupme_access_token = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
 
-groupme_send_buffer = queue.Queue()
+mirrors = [
+    {
+      "groupme_group_id": 99999999,
+      "discord_guild_id": 999999999999999999,
+      "discord_channel_id": 999999999999999999,
+      },
+    {
+      "groupme_group_id": 99999999,
+      "discord_guild_id": 999999999999999999,
+      "discord_channel_id": 999999999999999999,
+      },
+    ]
 
-guild_id = 999999999999999999
-channel_id = 999999999999999999
+groupme_send_buffer = queue.Queue()
 
 heart = "❤"
 
 client = discord.Client()
 
-recent_messages = []
+recent_messages = [[]] * len(mirrors)
 
 logging.basicConfig(format="%(asctime)-15s %(message)s", level=logging.INFO, stream=sys.stdout)
 log = logging.getLogger("leslie-bot-2")
@@ -35,29 +44,49 @@ log.info("Logging in now...")
 def guid():
   return uuid.uuid4().hex 
 
-def register_message(discord_id, groupme_id, groupme_source_guid):
+def get_server_by_discord_channel_id(id):
+  for i, mirror in enumerate(mirrors):
+    if mirror["discord_channel_id"] == id:
+      log.debug("discord channel {} => server {}".format(id, i))
+      return i
+  log.debug("discord channel {} => server {}".format(id, -1))
+  return -1
+
+def get_server_from_groupme_group_id(id):
+  id = int(id)
+  for i, mirror in enumerate(mirrors):
+    if mirror["groupme_group_id"] == id:
+      log.debug("groupme group {} => server {}".format(id, i))
+      return i
+  log.debug("groupme group {} => server {}".format(id, -1))
+  return -1
+
+def register_message(server, discord_id, groupme_id, groupme_source_guid):
   global recent_messages
-  recent_messages.insert(0, {
+  if server < 0:
+    log.error("register_message got invalid server {}".format(server))
+    return
+  recent_messages[server].insert(0, {
     "discord_id": discord_id,
     "groupme_id": groupme_id,
     "groupme_source_guid": groupme_source_guid,
     "has_discord_favorites": False,
     })
-  recent_messages = recent_messages[:40]
+  recent_messages[server] = recent_messages[server][:40]
   log.debug("Registered message with IDs {}, {}, {}".format(discord_id, groupme_id, groupme_source_guid))
 
-async def add_macro(text, url):
+async def add_macro(server, text, url):
   matchdata = re.search("#add_macro ([^ ]*)", text)
   if not matchdata:
     err = "Failed to find new macro name in message '{}'".format(text)
     log.error(err)
-    await inject_message(err, False)
+    await inject_message(server, err, False)
     return
   name = matchdata.group(1)
   if len(db.Select("macros", name = name)) > 0:
     err = "Stubbornly refusing to overwrite existing macro {} to new url {}".format(name, url)
     log.error(err)
-    await inject_message(err, False)
+    await inject_message(server, err, False)
     return
   log.info("Added new macro {} url {}".format(name, url))
   db.Insert("macros", name = name, url = url)
@@ -76,26 +105,26 @@ def get_macro_url(text):
     return False, err
   return True, results[0]["url"]
 
-async def handle_macro(text, attachments):
+async def handle_macro(server, text, attachments):
   attachments = [a for a in attachments if a["type"] == "image"]
   url = False
   if len(attachments) > 0:
     url = attachments[0]["url"]
   if "#add_macro" in text:
     if not url:
-      await inject_message("No attachment?", False)
+      await inject_message(server, "No attachment?", False)
       return
-    await add_macro(text, url)
+    await add_macro(server, text, url)
     return
   if re.search("#m [^ ]*", text):
     status, url = get_macro_url(text)
     if status:
-      await inject_message("", url)
+      await inject_message(server, "", url)
     else:
-      await inject_message(url, False)
+      await inject_message(server, url, False)
 
-async def inject_message(text, url):
-  channel = client.get_channel(channel_id)
+async def inject_message(server, text, url):
+  channel = client.get_channel(mirrors[server]["discord_channel_id"])
   e = None
   if url:
     e = discord.Embed()
@@ -104,10 +133,10 @@ async def inject_message(text, url):
   data = {
       "text": text,
       "source_guid": guid(),
-  }
+      }
   if url:
     data["attachments"] = [{"type": "image", "url": url}]
-  groupme_send_buffer.put([m.id, json.dumps({"message": data})])
+  groupme_send_buffer.put([server, m.id, json.dumps({"message": data})])
   # groupme send thread will call register_message
 
 
@@ -170,11 +199,11 @@ def extract_emoji_id(emoji_id):
   return int(emoji_id.split(":")[2].replace(">", ""))
 
 # key, user_id, emoji_id
-async def get_emoji(key, user_id, display_name):
+async def get_emoji(server, key, user_id, display_name):
   results = db.Select("main", key = key);
   if len(results) == 1:
     return results[0]["emoji_id"]
-  guild = client.get_guild(guild_id)
+  guild = client.get_guild(mirrors[server]["discord_guild_id"])
   old_emoji = db.Select("main", user_id = user_id)
   if len(old_emoji) > 0:
     e = client.get_emoji(extract_emoji_id(old_emoji[0]["emoji_id"]))
@@ -182,18 +211,23 @@ async def get_emoji(key, user_id, display_name):
       log.info("Deleting emoji " + str(e))
       await e.delete(reason = "User " + user_id + ", " + display_name + " has new profile picture")
     db.Delete("main", user_id = user_id)
-  name = hashlib.md5(key.encode("utf-8")).hexdigest()[:6]
-  log.info("Creating emoji " + name + " for user "+user_id+", "+display_name+" with image from " + key)
-  data = requests.get(key)
-  image = Image.open(io.BytesIO(data.content))
-  image = image.resize((32, 32), Image.ANTIALIAS)
-  resized = io.BytesIO()
-  image.save(resized, format='PNG')
-  log.debug(len(resized.getvalue()));
-  emoji = await guild.create_custom_emoji(name = name , image = resized.getvalue(), reason = "Leslie-Bot: New avatar for user ID " + user_id + ", name: " + display_name)
-  emoji_id = "<:{}:{}>".format(name, emoji.id);
-  db.Insert("main", key = key, user_id = user_id, emoji_id = emoji_id);
-  return emoji_id
+  try:
+    name = hashlib.md5(key.encode("utf-8")).hexdigest()[:6]
+    log.info("Creating emoji " + name + " for user "+user_id+", "+display_name+" with image from " + key)
+    data = requests.get(key)
+    log.info("Got {} bytes of content".format(len(data.content)))
+    image = Image.open(io.BytesIO(data.content))
+    image = image.resize((32, 32), Image.ANTIALIAS)
+    resized = io.BytesIO()
+    image.save(resized, format='PNG')
+    log.debug(len(resized.getvalue()));
+    emoji = await guild.create_custom_emoji(name = name , image = resized.getvalue(), reason = "Leslie-Bot: New avatar for user ID " + user_id + ", name: " + display_name)
+    emoji_id = "<:{}:{}>".format(name, emoji.id);
+    db.Insert("main", key = key, user_id = user_id, emoji_id = emoji_id);
+    return emoji_id
+  except Exception as e:
+    log.exception(e)
+    return ""
 
 def get_emoji_simple(user_id):
   results = db.Select("main", user_id = user_id);
@@ -206,7 +240,10 @@ async def on_message(message):
   if message.author.bot:
     log.debug("DISCARDING BOT MESSAGE FROM ", message.author)
     return
-  if not message.channel or message.channel.id != channel_id:
+  server = -1
+  if message.channel:
+    server = get_server_by_discord_channel_id(message.channel.id)
+  if not message.channel or message.channel.id == -1:
     log.debug("Discarding message from " + str(message.channel));
     return
   while True:
@@ -229,24 +266,31 @@ async def on_message(message):
     data["attachments"].append({"type": "image", "url": upload(em.url)})
 
   # data["text"] = data["text"].replace("%", chr(0x200b) + "0⁄0" + chr(0x200b));
-  groupme_send_buffer.put([message.id, json.dumps({"message": data})])
-  await handle_macro(message.content, data["attachments"])
+  groupme_send_buffer.put([server, message.id, json.dumps({"message": data})])
+  await handle_macro(server, message.content, data["attachments"])
 
 
-def favorite_message(id):
-  r = requests.post("{}/messages/{}/{}/like".format(API_BASE, groupme_group_id, id), headers = {"X-Access-Token": groupme_access_token})
+def favorite_message(server, id):
+  r = requests.post("{}/messages/{}/{}/like".format(API_BASE, mirrors[server]["groupme_group_id"], id), headers = {"X-Access-Token": groupme_access_token})
   if r.status_code != 200:
     log.error("Error favoriting message {}. Status {}, response: {}".format(id, r.status_code, r.text))
 
-def unfavorite_message(id):
-  r = requests.post("{}/messages/{}/{}/unlike".format(API_BASE, groupme_group_id, id), headers = {"X-Access-Token": groupme_access_token})
+def unfavorite_message(server, id):
+  r = requests.post("{}/messages/{}/{}/unlike".format(API_BASE, mirrors[server]["groupme_group_id"], id), headers = {"X-Access-Token": groupme_access_token})
   if r.status_code != 200:
     log.error("Error unfavoriting message {}. Status {}, response: {}".format(id, r.status_code, r.text))
 
 @client.event
 async def on_reaction_add(reaction, user):
+  channel = reaction.message.channel
+  server = -1
+  if channel:
+    server = get_server_by_discord_channel_id(channel.id)
+  if server == -1:
+    log.debug("Ignoring reaction_add to message in {}".format(channel))
+    return
   try:
-    m = next(x for x in recent_messages if x["discord_id"] == reaction.message.id)
+    m = next(x for x in recent_messages[server] if x["discord_id"] == reaction.message.id)
   except Exception as e:
     log.error("Message with discord id {} not found in recent_messages".format(id))
     return
@@ -257,23 +301,23 @@ async def on_reaction_add(reaction, user):
   if has_discord_favorites == m["has_discord_favorites"]:
     return
   if has_discord_favorites and not m["has_discord_favorites"]:
-    favorite_message(m["groupme_id"])
+    favorite_message(server, m["groupme_id"])
   else:
-    unfavorite_message(m["groupme_id"])
+    unfavorite_message(server, m["groupme_id"])
   m["has_discord_favorites"] = has_discord_favorites
 
 @client.event
 async def on_reaction_remove(reaction, user):
   await on_reaction_add(reaction, user)
 
-async def update_discord_likes_from_groupme(users, id, source_guid):
+async def update_discord_likes_from_groupme(server, users, id, source_guid):
   try:
-    m = next(x for x in recent_messages if x["groupme_id"] == id and x["groupme_source_guid"] == source_guid)
+    m = next(x for x in recent_messages[server] if x["groupme_id"] == id and x["groupme_source_guid"] == source_guid)
   except Exception:
     log.error("Message with groupme ids {}, {} not found in recent_messages".format(id, source_guid))
     return
   users = list(filter(lambda user: int(user) != groupme_user_id, users)) # filter out myself
-  m = await client.get_channel(channel_id).fetch_message(m["discord_id"])
+  m = await client.get_channel(mirrors[server]["discord_channel_id"]).fetch_message(m["discord_id"])
   reaccs = [r for r in m.reactions if r.me]
   needed = set(filter(None, (get_emoji_simple(user) for user in users)))
   needed = [client.get_emoji(n) for n in needed]
@@ -288,7 +332,9 @@ async def update_discord_likes_from_groupme(users, id, source_guid):
     await m.add_reaction(e)
 
 async def RecvMessage(s):
-  channel = client.get_channel(channel_id)
+  server = get_server_from_groupme_group_id(s["group_id"])
+  mirror = mirrors[server]
+  channel = client.get_channel(mirror["discord_channel_id"])
   if s["sender_type"] == "bot":
     log.debug("RecvMessage discarding bot message from sender {}".format(s["sender_id"]))
     return
@@ -298,12 +344,12 @@ async def RecvMessage(s):
     if attachment["type"] == "image":
       e = discord.Embed()
       e.set_image(url = attachment["url"])
-  emoji = await get_emoji(s["avatar_url"], s["sender_id"], s["name"]) if s["sender_id"] != "system" else ""
+  emoji = await get_emoji(server, s["avatar_url"], s["sender_id"], s["name"]) if s["sender_id"] != "system" else ""
   if not s["text"]:
     s["text"] = ""
   m = await channel.send(emoji + "**" + nickname + "**: " + s["text"], embed = e);
-  register_message(m.id, int(s["id"]), s["source_guid"])
-  await handle_macro(s["text"], s["attachments"])
+  register_message(server, m.id, int(s["id"]), s["source_guid"])
+  await handle_macro(server, s["text"], s["attachments"])
 
 client_loop = asyncio.get_event_loop()
 
@@ -378,7 +424,8 @@ class GroupmeConnection():
   def on_open(self, ws):
     log.info("Socket open")
     self.subscribe(ws, "/user/{}".format(groupme_user_id))
-    self.subscribe(ws, "/group/{}".format(groupme_group_id))
+    for mirror in mirrors:
+      self.subscribe(ws, "/group/{}".format(mirror["groupme_group_id"]))
     self.send_connect(ws)
 
   def on_message(self, ws, message):
@@ -397,7 +444,8 @@ class GroupmeConnection():
         self.send_connect(ws)
       elif "data" in m and m["data"]["type"] == "line.create":
         d = m["data"]["subject"]
-        if int(d["group_id"]) != groupme_group_id:
+        server = get_server_from_groupme_group_id(d["group_id"])
+        if server == -1:
           log.debug("Groupme discarding message to unknown group {}".format(d["group_id"]))
           return
         if d["sender_id"] != "system" and int(d["sender_id"]) == groupme_user_id:
@@ -412,7 +460,8 @@ class GroupmeConnection():
       elif "data" in m and m["data"]["type"] == "favorite":
         d = m["data"]["subject"]["line"]
         log.debug("Got favorite call")
-        coro = update_discord_likes_from_groupme(d["favorited_by"], int(d["id"]), d["source_guid"])
+        server = get_server_from_groupme_group_id(d["group_id"])
+        coro = update_discord_likes_from_groupme(server, d["favorited_by"], int(d["id"]), d["source_guid"])
         future = asyncio.run_coroutine_threadsafe(coro, client_loop)
         future.result()
       elif "data" not in m and m.get("successful", False) and m["channel"] == "/user/{}".format(groupme_user_id):
@@ -450,14 +499,15 @@ def groupme_send_thread():
   while True:
     item = groupme_send_buffer.get() 
     try:
-      r = requests.post("{}/groups/{}/messages".format(API_BASE, groupme_group_id), data = item[1], headers = {"X-Access-Token": groupme_access_token, "Content-Type": "application/json;charset=UTF-8"})
+      mirror = mirrors[item[0]]
+      r = requests.post("{}/groups/{}/messages".format(API_BASE, mirror["groupme_group_id"]), data = item[2], headers = {"X-Access-Token": groupme_access_token, "Content-Type": "application/json;charset=UTF-8"})
       if r.status_code != 201:
-        log.error("Failed to upload item, status code {}: {}\n{}".format(r.status_code, json.dumps(json.loads(item[1]), indent=4), r.text))
+        log.error("Failed to upload item, status code {}: {}\n{}".format(r.status_code, json.dumps(json.loads(item[2]), indent=4), r.text))
       else:
-        discord_id = item[0]
+        discord_id = item[1]
         groupme_id = int(r.json()["response"]["message"]["id"])
         source_guid = r.json()["response"]["message"]["source_guid"]
-        register_message(discord_id, groupme_id, source_guid)
+        register_message(item[0], discord_id, groupme_id, source_guid)
     except Exception as e:
       log.exception(e)
 
