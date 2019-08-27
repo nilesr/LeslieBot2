@@ -247,7 +247,7 @@ def unfavorite_message(id):
 async def on_reaction_add(reaction, user):
   try:
     m = next(x for x in recent_messages if x["discord_id"] == reaction.message.id)
-  except Exceptions as e:
+  except Exception as e:
     log.error("Message with discord id {} not found in recent_messages".format(id))
     return
   reaccs = [r for r in reaction.message.reactions if not (r.me and r.count == 1) and r.emoji == heart]
@@ -451,7 +451,7 @@ def groupme_send_thread():
     item = groupme_send_buffer.get() 
     r = requests.post("{}/groups/{}/messages".format(API_BASE, groupme_group_id), data = item[1], headers = {"X-Access-Token": groupme_access_token, "Content-Type": "application/json;charset=UTF-8"})
     if r.status_code != 201:
-      log.error("Failed to upload item, status code {}: {}\n{}".format(r.status_code, json.dumps(json.loads(item), indent=4), r.text))
+      log.error("Failed to upload item, status code {}: {}\n{}".format(r.status_code, json.dumps(json.loads(item[1]), indent=4), r.text))
     else:
       discord_id = item[0]
       groupme_id = int(r.json()["response"]["message"]["id"])
