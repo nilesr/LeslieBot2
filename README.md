@@ -14,7 +14,7 @@ Install prerequisites: discord.py **rewrite branch**, `base36`, `websocket-clien
 
 In the developer portal for Discord, create a discord bot. Put your discord bot access token in the `client.run` call at the bottom of `leslie-bot.py`, and put the guild id and channel id in the variables at the top.
 
-Create a new GroupMe account and join the group you would like to mirror. Go to the develoepr portal and obtain an access token. Put your personal GroupMe access token, GroupMe user ID, and the ID of the group you would like to mirror in the variables at the top of `leslie-bot.py`.
+Create a new GroupMe account and join the group you would like to mirror. Go to the developer portal and obtain an access token. Put your personal GroupMe access token, GroupMe user ID, and the ID of the group you would like to mirror in the variables at the top of `leslie-bot.py`.
 
 Add the Discord bot to the right guild. The discord bot wants permission to view channels, read messages, send messages, send messages with embeds and images, add reactions, and **manage custom emoji** (see the emoji section).
 
