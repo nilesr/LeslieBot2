@@ -449,14 +449,17 @@ def groupme_recv_thread():
 def groupme_send_thread():
   while True:
     item = groupme_send_buffer.get() 
-    r = requests.post("{}/groups/{}/messages".format(API_BASE, groupme_group_id), data = item[1], headers = {"X-Access-Token": groupme_access_token, "Content-Type": "application/json;charset=UTF-8"})
-    if r.status_code != 201:
-      log.error("Failed to upload item, status code {}: {}\n{}".format(r.status_code, json.dumps(json.loads(item[1]), indent=4), r.text))
-    else:
-      discord_id = item[0]
-      groupme_id = int(r.json()["response"]["message"]["id"])
-      source_guid = r.json()["response"]["message"]["source_guid"]
-      register_message(discord_id, groupme_id, source_guid)
+    try:
+      r = requests.post("{}/groups/{}/messages".format(API_BASE, groupme_group_id), data = item[1], headers = {"X-Access-Token": groupme_access_token, "Content-Type": "application/json;charset=UTF-8"})
+      if r.status_code != 201:
+        log.error("Failed to upload item, status code {}: {}\n{}".format(r.status_code, json.dumps(json.loads(item[1]), indent=4), r.text))
+      else:
+        discord_id = item[0]
+        groupme_id = int(r.json()["response"]["message"]["id"])
+        source_guid = r.json()["response"]["message"]["source_guid"]
+        register_message(discord_id, groupme_id, source_guid)
+    except Exception as e:
+      log.exception(e)
 
 
 t = threading.Thread(target = groupme_recv_thread)
