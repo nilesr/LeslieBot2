@@ -243,7 +243,7 @@ async def on_message(message):
   server = -1
   if message.channel:
     server = get_server_by_discord_channel_id(message.channel.id)
-  if not message.channel or message.channel.id == -1:
+  if not message.channel or server == -1:
     log.debug("Discarding message from " + str(message.channel));
     return
   while True:
