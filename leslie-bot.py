@@ -27,6 +27,8 @@ mirrors = [
       },
     ]
 
+owner = 999999999999999999
+
 groupme_send_buffer = queue.Queue()
 
 heart = "❤"
@@ -237,6 +239,10 @@ def get_emoji_simple(user_id):
 
 @client.event
 async def on_message(message):
+  if message.channel and isinstance(message.channel, discord.DMChannel) and message.author.id == owner:
+    # status None defaults to online
+    await client.change_presence(status=None, activity=discord.Game(message.content))
+    return
   if message.author.bot:
     log.debug("DISCARDING BOT MESSAGE FROM ", message.author)
     return
@@ -292,7 +298,7 @@ async def on_reaction_add(reaction, user):
   try:
     m = next(x for x in recent_messages[server] if x["discord_id"] == reaction.message.id)
   except Exception as e:
-    log.error("Message with discord id {} not found in recent_messages".format(id))
+    log.error("Message with discord id {} not found in recent_messages".format(reaction.message.id))
     return
   reaccs = [r for r in reaction.message.reactions if not (r.me and r.count == 1) and r.emoji == heart]
   has_discord_favorites = len(reaccs) > 0
